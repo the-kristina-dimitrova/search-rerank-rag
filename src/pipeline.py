@@ -1,11 +1,13 @@
 """End-to-end retrieve-then-rerank pipeline."""
 from __future__ import annotations
 
-from .data import Corpus
-from .reranker import CrossEncoderReranker
-from .retrievers import Retriever
+from typing import TYPE_CHECKING
 
-
+if TYPE_CHECKING:
+    from .data import Corpus
+    from .reranker import CrossEncoderReranker
+    from .retrievers import Retriever
+    
 class Pipeline:
     """Two-stage pipeline: first-stage retriever -> optional cross-encoder reranker.
 
