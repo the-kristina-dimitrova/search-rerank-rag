@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Project-specific
+datasets/
+indexes/
+results/*.json
+results/*.csv
+*.faiss
+*.pkl
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Models cache
+.cache/
