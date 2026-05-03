@@ -1,293 +1,146 @@
-# Retrieval, Reranking, and RAG on SciFact — Technical Report
+# Technical Report — Search, Rerank, RAG
 
-## 1. Problem statement
+## 1. Problem
 
-Build a small two-stage information retrieval system over a scientific corpus
-and evaluate it rigorously. Specifically: given a scientific claim, retrieve
-the most relevant abstracts from a fixed corpus, rerank the candidates with a
-cross-encoder, and optionally generate a grounded answer that cites which
-passages support its claims.
+Given a query, retrieve the most relevant passages from a corpus, rerank them for precision, and optionally generate a grounded answer with citations. Evaluate each stage independently with standard offline metrics.
 
-The goal is not to push state-of-the-art numbers — the dataset and models are
-all small, public, and run on a CPU laptop. The goal is to compare four
-configurations honestly under identical conditions, expose where each one
-fails, and treat retrieval and generation as **separately measurable**
-problems.
+## 2. Architecture
 
-## 2. Why this design
+Two-stage retrieve-then-rerank, the dominant pattern in production search:
 
-A modern search stack is rarely a single model. The dominant pattern is:
+1. **First stage** — fast, recall-oriented. Retrieves top-N candidates from the full corpus.
+2. **Second stage** — slow, precision-oriented. Cross-encoder rescores only those N candidates.
 
-1. **First stage** — fast, recall-oriented retrieval over the entire corpus.
-2. **Second stage** — slow, precision-oriented reranking over a small
-   candidate pool produced by stage one.
+Four configurations on a 2×2 grid (two retrievers × with/without reranker) isolate whether improvement comes from the retriever or the reranker.
 
-The reason is throughput. Cross-encoders score `(query, doc)` pairs by feeding
-both through a transformer jointly. They are sharper than dual-encoder
-embeddings (which encode query and doc independently and compare with a dot
-product) but ~100× slower per pair. Running a cross-encoder over the entire
-corpus per query is infeasible. Running it over the top-100 candidates from a
-cheap first stage is fine.
+## 3. Setup
 
-This project compares **two first stages** (lexical BM25, dense MiniLM), each
-optionally followed by the same cross-encoder. That gives four configurations
-on a 2×2 grid, which is the minimum needed to disentangle two questions:
+**Dataset.** BEIR/SciFact: 5,183 scientific abstracts, 300 test claims with binary relevance judgements. Chosen for clean qrels, small size (iterates on a laptop), and published baselines to sanity-check against.
 
-- Does the *first stage* matter? (BM25 vs dense, both unranked)
-- Does *reranking* matter, and does its benefit depend on the first stage?
-  (`+ce` rows vs unranked rows)
-
-## 3. Experimental setup
-
-### 3.1 Dataset
-
-[BEIR/SciFact](https://github.com/beir-cellar/beir): 5,183 scientific abstracts
-as the corpus, 300 test claims as queries, with binary relevance judgements
-identifying which abstracts support or refute each claim. SciFact was chosen
-because it is small enough to iterate on a laptop, has clean human-annotated
-qrels, and has published baseline numbers I can sanity-check against.
-
-### 3.2 Models
+**Models.**
 
 | Component | Model | Parameters |
 |---|---|---|
-| Lexical retriever | `bm25s` (Okapi BM25, k1=1.5, b=0.75) | n/a |
-| Dense encoder | `sentence-transformers/all-MiniLM-L6-v2` | 22M |
-| Cross-encoder | `cross-encoder/ms-marco-MiniLM-L-6-v2` | 22M |
-| Generator (RAG) | `claude-haiku-4-5` via Anthropic API | n/a |
+| Lexical retriever | BM25 (k1=1.5, b=0.75) via `bm25s` | — |
+| Dense retriever | `all-MiniLM-L6-v2` + FAISS `IndexFlatIP` | 22M |
+| Cross-encoder | `ms-marco-MiniLM-L-6-v2` | 22M |
+| RAG generator | Llama 3.3 70B via Groq | — |
 
-All transformer models were chosen for CPU friendliness. MiniLM-L-6 is the
-smallest competitive option for both dense retrieval and cross-encoder
-reranking on BEIR-style benchmarks.
+All models run on CPU. Embeddings are L2-normalised so inner product = cosine similarity. FAISS uses exact search (fine at 5K docs). The RAG layer is provider-agnostic — Anthropic and Gemini are also supported via a pluggable backend protocol.
 
-### 3.3 Pipeline parameters
-
-- Candidate pool size for reranking: `retrieve_k = 100`.
-- Final ranked list size for evaluation: `top_k = 100` (metrics computed at
-  cutoffs 10, 50, 100).
-- FAISS index: `IndexFlatIP` over L2-normalised embeddings (so inner product =
-  cosine). Exact search is fine at this corpus size; index-building takes a
-  few seconds and adds zero variance.
-- BM25 tokenisation: lowercase, English stopwords removed, no stemming.
-
-### 3.4 Metrics
-
-I implemented Recall@k, Precision@k, MRR@k, and nDCG@k from scratch in
-`src/evaluation.py` rather than calling `pytrec_eval`. The implementation is
-verified against hand-computed values in `tests/test_metrics.py` (perfect
-ranking → nDCG = 1, no relevant doc in top k → MRR = 0, etc.).
-
-The metrics are macro-averaged over queries: each query contributes equally
-regardless of how many relevant documents it has. This matches the BEIR
-convention.
+**Metrics.** Recall@k, Precision@k, MRR@k, nDCG@k implemented from scratch and verified against hand-computed values in the test suite. Macro-averaged over queries (BEIR convention).
 
 ## 4. Results
 
-> Run `python -m scripts.evaluate --dataset scifact` to populate this section.
-> Reference numbers from the BEIR leaderboard for sanity-checking are in
-> brackets.
+### 4.1 Retrieval quality (300 queries)
 
-### 4.1 Quality
+| Method | Recall@10 | MRR@10 | nDCG@10 | Recall@50 | nDCG@50 | Recall@100 | nDCG@100 |
+|---|---|---|---|---|---|---|---|
+| BM25 | 0.774 | 0.631 | 0.662 | 0.869 | 0.685 | 0.876 | 0.686 |
+| Dense | 0.788 | 0.607 | 0.648 | 0.889 | 0.672 | 0.925 | 0.678 |
+| BM25+CE | 0.786 | 0.647 | 0.674 | 0.869 | 0.695 | 0.876 | 0.696 |
+| **Dense+CE** | **0.809** | **0.656** | **0.687** | **0.900** | **0.709** | **0.925** | **0.713** |
 
-| Method | recall@10 | mrr@10 | ndcg@10 |
-|---|---|---|---|
-| bm25 | _TODO_ [≈0.66] | _TODO_ | _TODO_ |
-| dense | _TODO_ [≈0.65] | _TODO_ | _TODO_ |
-| bm25+ce | _TODO_ | _TODO_ | _TODO_ |
-| dense+ce | _TODO_ | _TODO_ | _TODO_ |
+BM25 nDCG@10 = 0.662 matches the BEIR leaderboard reference (~0.66), confirming correct implementation.
 
-Things to verify when filling this in:
+### 4.2 Latency (50 queries, 3 reps, CPU)
 
-- **BM25 nDCG@10 ≈ 0.66**, otherwise tokenisation or indexing is broken.
-- Dense should be roughly comparable to BM25 on SciFact (it is *not* an easy
-  win — SciFact has a lot of scientific jargon where lexical match is strong).
-- Both `+ce` rows should improve over their respective base. The improvement
-  is bounded above by recall@`retrieve_k` of the first stage: if BM25 only
-  finds the gold passage in 80% of queries within the top 100, the reranker
-  cannot recover the missing 20% no matter how good it is.
+**Indexing (one-off):**
 
-### 4.2 Latency
-
-> Run `python -m scripts.benchmark --dataset scifact` to populate this.
-
-Headline numbers (ms per query, end-to-end, `retrieve_k=100`, `top_k=10`):
-
-| Method | latency |
+| Component | Time |
 |---|---|
-| bm25 | _TODO_ |
-| dense | _TODO_ |
-| bm25+ce | _TODO_ |
-| dense+ce | _TODO_ |
+| BM25 | 0.70s |
+| Dense (encode 5K docs + FAISS) | 141.5s |
 
-The dominant cost in `+ce` configurations is the cross-encoder forward pass
-(100 query-doc pairs per query at ~10–30 ms each on CPU). First-stage
-retrieval is sub-millisecond for BM25 and a few milliseconds for dense.
-Indexing is one-off: BM25 in seconds, dense encoding the full corpus in 1–2
-minutes on CPU.
+**First-stage retrieval (ms/query):**
 
-The latency-vs-quality tradeoff has a clear shape. For each value of
-`retrieve_k`:
+| retrieve_k | BM25 | Dense |
+|---|---|---|
+| 10 | 0.3 ± 0.1 | 9.0 ± 0.9 |
+| 50 | 0.3 ± 0.0 | 8.8 ± 0.7 |
+| 100 | 0.3 ± 0.0 | 8.8 ± 0.7 |
+| 200 | 0.3 ± 0.0 | 8.6 ± 0.7 |
 
-- Larger pool → reranker has more chances to find the gold passage → better
-  nDCG, up to a ceiling set by first-stage recall.
-- Larger pool → linear increase in rerank time.
-- The sweet spot on SciFact is around `retrieve_k=100`. Beyond that, recall
-  improvements taper while latency keeps growing linearly.
+**Cross-encoder reranking (ms/query):**
 
-## 5. Failure mode analysis
+| Pool size | Rerank time |
+|---|---|
+| 10 | 159.5 ± 25.1 |
+| 50 | 706.6 ± 61.4 |
+| 100 | 1435.7 ± 170.5 |
+| 200 | 2838.0 ± 289.8 |
 
-> Fill in with concrete query examples after running evaluation. The framework
-> below is what to look for.
+**End-to-end (retrieve_k=100, top_k=10):**
 
-### 5.1 Where BM25 wins
+| Method | ms/query |
+|---|---|
+| BM25 | 0.2 ± 0.1 |
+| Dense | 9.6 ± 13.9 |
+| BM25+CE | 1506.5 ± 211.9 |
+| Dense+CE | 1540.9 ± 291.2 |
 
-Queries with **rare technical terms** that appear verbatim in the relevant
-abstract: gene names, chemical formulas, specific drug names, citation
-identifiers. Lexical match dominates because the vocabulary is narrow and
-unambiguous. Dense models can be misled by surface-level semantic similarity
-to *other* abstracts that discuss the same general topic but not the specific
-entity in the query.
+## 5. Analysis
 
-Look for queries where BM25 ranks the gold doc top-3 and dense ranks it
-beyond top-50.
+### BM25 beats dense at the top of the list
 
-### 5.2 Where dense wins
+BM25 nDCG@10 (0.662) exceeds dense nDCG@10 (0.648) despite dense having better recall@100 (0.925 vs 0.876). Scientific abstracts are lexically precise — gene names, drug names, measurement units appear verbatim in both query and passage. BM25 matches these exactly. Dense retrieval captures semantic similarity but also retrieves thematically related passages that use different terminology, which are irrelevant under binary qrels.
 
-Queries where the **claim is paraphrased** with little token overlap with the
-abstract that supports it. Example: claim says "X reduces Y" while the
-abstract uses synonyms ("X attenuates Y", "decline in Y observed in X group").
-BM25 has nothing to match on; dense embeddings catch the semantic
-relationship.
+Dense recovers at recall@100 because it casts a wider semantic net — it finds relevant passages BM25 misses when the claim is paraphrased. But BM25 ranks its finds higher.
 
-### 5.3 Where reranking helps
+### Dense gives the reranker more to work with
 
-The cross-encoder reads query and passage **jointly**. Its win is greatest
-when the gold passage is in the candidate pool but not at the top — for
-example, BM25 ranked it #20 because of token sparsity, but the cross-encoder
-recognises that this passage actually answers the query when it sees them
-together.
+Reranking adds +0.012 nDCG@10 on BM25 but +0.038 on dense. The asymmetry is explained by recall@100: dense provides a 5% larger candidate pool (0.925 vs 0.876), giving the reranker more relevant passages to promote. First-stage recall is the ceiling for reranked quality — the reranker cannot recover passages the retriever missed.
 
-Concrete pattern: BM25 nDCG@10 = 0 (gold not in top 10), but BM25+CE nDCG@10
-> 0 (gold pulled into top 10 by reranker).
+### Reranking is ~7,500× slower for ~3.8% nDCG gain
 
-### 5.4 Where reranking is still weak
+Dense+CE achieves the best nDCG@10 (0.687) at 1541ms/query — versus 0.2ms for BM25 alone. Reranking latency scales linearly with pool size: 160ms for 10 candidates, 707ms for 50, 1436ms for 100, 2838ms for 200. The cross-encoder processes each (query, doc) pair sequentially on CPU with no batching benefit across queries.
 
-If the gold passage is **not in the candidate pool**, the reranker cannot
-help. This is the recall ceiling I mentioned above. Fixes are: increase
-`retrieve_k`, or fix the first stage (e.g. ensemble BM25 + dense scores
-before reranking).
+BM25 retrieval is constant at 0.3ms regardless of retrieve_k. Dense retrieval is ~9ms, also roughly constant — FAISS exact search cost is dominated by the query encoding forward pass, not the search itself.
 
-### 5.5 Process for filling this section in
+### Out-of-domain queries fail honestly
 
-For each method, dump the 10 queries with the lowest nDCG@10. For each, look
-at:
+Queries outside SciFact's domain (e.g. "does aspirin reduce heart attack risk?") return the nearest-domain passages (aspirin + colorectal cancer studies). The cross-encoder assigns negative scores to these (-0.7, -2.6), which can serve as a low-confidence signal. A well-prompted RAG system should refuse to answer rather than confabulate — and the grounding prompt in this project does exactly that.
 
-1. Is the gold passage in the candidate pool? (Sets ceiling.)
-2. What did the system rank above the gold? (Tells you what feature it's
-   confusing.)
-3. What's the linguistic relationship between query and gold? (Lexical?
-   Paraphrase? Multi-hop?)
+## 6. Design decisions
 
-Five well-analysed examples beat fifty pages of prose.
+**Custom metrics over pytrec_eval.** Avoids the Java-via-pip dependency. Forces clarity about what each metric computes. Verified against hand-computed values including edge cases (empty qrels, perfect ranking).
 
-## 6. Tradeoffs and design lessons
+**Provider-agnostic RAG.** Three-method `LLMBackend` protocol with Groq, Gemini, and Anthropic implementations. Lazy imports ensure each backend only requires its own SDK. Adding a fourth provider is a ~15-line class.
 
-**Reranking is a precision booster, not a recall booster.** It can only
-reorder what the first stage hands it. If first-stage recall@`retrieve_k` is
-the ceiling, then improving the first stage is the higher-leverage move once
-the reranker is "working."
+**Section-aware PDF chunking.** Lecture notes are split by numbered headings, not paragraphs. Splitting mid-proof loses context the retriever needs. The chunker filters false positives (page numbers, TOC entries) and skips the first 3 pages (table of contents).
 
-**Dense doesn't always beat BM25.** On lexical-heavy domains (scientific
-abstracts, legal text, code) BM25 is a strong baseline that's hard to beat
-with off-the-shelf embeddings. The win for dense retrieval is in
-paraphrase-heavy or open-domain settings. This is why the BEIR paper exists —
-to expose that dense models trained on MS MARCO transfer unevenly across
-domains.
+**Index caching.** Dense index (FAISS + doc_ids) persisted to disk after the first build. Subsequent runs load in <1s instead of re-encoding the full corpus (~142s).
 
-**The cross-encoder is the latency bottleneck.** On CPU, ~10–30 ms per
-`(query, doc)` pair × 100 candidates = 1–3 seconds of latency per query.
-Production systems work around this with model distillation, ONNX
-quantisation, or smaller candidate pools. None of those are explored here.
-
-**RAG quality is bottlenecked by retrieval quality.** The generation step
-cannot fix bad retrieval — it can only refuse to answer or hallucinate. This
-is why I evaluate retrieval *separately* from RAG output, with hard metrics
-on retrieval and a qualitative demo for generation.
+**TYPE_CHECKING import guards.** Heavy ML dependencies (torch, FAISS, BEIR) are behind `if TYPE_CHECKING:` in pipeline.py so the unit test suite runs in <0.1s with only pytest installed. CI needs no GPU, no torch, no FAISS.
 
 ## 7. Limitations
 
-- **One dataset.** Numbers on SciFact don't transfer directly to other
-  domains. A real evaluation would run multiple BEIR subsets and report
-  averaged metrics. SciFact is the focused-but-honest single-domain case.
-- **Binary relevance.** SciFact qrels are 0/1, so nDCG collapses to a function
-  of rank position alone. Graded relevance (e.g. TREC-COVID's 0/1/2 scale)
-  would give a richer picture.
-- **No CV (cross-validation) on hyperparameters.** BM25's k1 and b are at
-  defaults; the encoder model is fixed. A more rigorous study would search
-  these. For this scope, defaults are honest because they match published
-  baselines.
-- **CPU-only evaluation latency.** GPU rerankers are 10–50× faster. The
-  reported per-query times tell you the *qualitative* shape of the
-  latency-quality tradeoff, not absolute production numbers.
-- **No statistical significance tests.** With 300 queries, paired bootstrap or
-  randomization tests would be appropriate before claiming one method beats
-  another by a small margin. This is left as future work.
+- **One dataset.** SciFact numbers don't transfer directly to other domains.
+- **Binary relevance.** nDCG with 0/1 judgements collapses to a function of rank position. Graded relevance would give a richer picture.
+- **Default hyperparameters.** BM25 k1/b and encoder/reranker models are all at defaults. Honest — matches published baselines — but leaves optimisation headroom unexplored.
+- **CPU-only latency.** GPU cross-encoders are 10–50× faster. Reported numbers show the shape of the tradeoff, not production-grade absolutes.
+- **No statistical significance.** With 300 queries, paired bootstrap tests would be needed before claiming differences below ~0.01 nDCG@10 are real.
 
 ## 8. Future work
 
-Roughly in order of impact-per-effort:
+1. **Hybrid retrieval** — reciprocal rank fusion of BM25 + dense before reranking. Typically the single biggest gain on BEIR.
+2. **Larger reranker** — `bge-reranker-base` (~280M params) for +0.02–0.04 nDCG@10 at ~5× latency.
+3. **Multi-dataset evaluation** — NFCorpus, FiQA, TREC-COVID via the existing `--dataset` flag.
+4. **ONNX quantisation** — recover GPU-class latency on CPU.
 
-1. **Hybrid first stage**: combine BM25 and dense scores via reciprocal rank
-   fusion before reranking. Often gives the biggest single gain on
-   BEIR-style benchmarks.
-2. **Add statistical significance**: paired bootstrap on per-query nDCG@10
-   between methods. With 300 queries, differences of ~0.02 are within noise;
-   anything smaller should not be claimed as an improvement.
-3. **Larger reranker** (e.g. `bge-reranker-base`, ~280M params): probably
-   adds another 0.02–0.04 nDCG@10 on SciFact at 5× the latency. Worth
-   measuring the tradeoff explicitly.
-4. **Multi-dataset evaluation**: extend the same pipeline to NFCorpus, FiQA,
-   TREC-COVID. The code is already dataset-agnostic via the `--dataset` flag
-   in the eval script.
-5. **Quantise the encoder and reranker** with ONNX + int8 to recover most of
-   the GPU latency on CPU. This is the production-engineering path.
-
-## 9. Reproducing this report
+## 9. Reproducing
 
 ```bash
-# Setup
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-
-# Sanity-check the codebase
-pytest
-
-# Run the full evaluation (~30–60 min on CPU)
-python -m scripts.evaluate --dataset scifact
-
-# Run latency benchmarks (~10 min)
-python -m scripts.benchmark --dataset scifact --n-queries 50 --reps 3
-
-# Optional: interactive UI
-streamlit run app.py
-
-# Optional: RAG demo (requires ANTHROPIC_API_KEY)
-python -m scripts.rag_demo --query "Does aspirin reduce heart attack risk?"
+pip install -r requirements.txt
+pytest                                                    # 17 tests, <1s
+python -m scripts.evaluate --dataset scifact              # ~30 min on CPU
+python -m scripts.benchmark --dataset scifact             # ~10 min
+streamlit run app.py                                      # interactive UI
 ```
-
-Outputs land in `results/`:
-- `scifact_metrics.json` and `scifact_table.md` — evaluation results
-- `scifact_latency.json` and `scifact_latency.md` — benchmark results
 
 ## 10. References
 
-- Thakur, Reimers, Rücklé, Srivastava, Gurevych. *BEIR: A Heterogeneous
-  Benchmark for Zero-shot Evaluation of Information Retrieval Models*.
-  NeurIPS Datasets & Benchmarks, 2021.
-- Wadden, Lin, Lo, Wang, van Zuylen, Cohan, Hajishirzi. *Fact or Fiction:
-  Verifying Scientific Claims*. EMNLP, 2020.
-- Reimers, Gurevych. *Sentence-BERT: Sentence Embeddings using Siamese
-  BERT-Networks*. EMNLP, 2019.
-- Nogueira, Cho. *Passage Re-ranking with BERT*. arXiv:1901.04085, 2019.
-- Lewis et al. *Retrieval-Augmented Generation for Knowledge-Intensive NLP
-  Tasks*. NeurIPS, 2020.
+- Thakur et al. *BEIR: A Heterogeneous Benchmark for Zero-shot Evaluation of Information Retrieval Models.* NeurIPS 2021.
+- Wadden et al. *Fact or Fiction: Verifying Scientific Claims.* EMNLP 2020.
+- Reimers & Gurevych. *Sentence-BERT.* EMNLP 2019.
+- Nogueira & Cho. *Passage Re-ranking with BERT.* arXiv:1901.04085.
