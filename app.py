@@ -89,7 +89,6 @@ if corpus is None:
     )
     st.stop()
 
-# Count sources for the subtitle
 n_scifact = sum(1 for k in corpus if k.startswith("scifact:"))
 n_notes = len(corpus) - n_scifact
 
@@ -111,7 +110,7 @@ with st.sidebar:
         options=["bm25", "dense", "bm25+ce", "dense+ce"],
         index=3,
         format_func=lambda m: {
-            "bm25": "BM25 (lexical)",
+            "bm25": "BM25",
             "dense": "Dense (MiniLM + FAISS)",
             "bm25+ce": "BM25 → cross-encoder",
             "dense+ce": "Dense → cross-encoder",
@@ -136,9 +135,9 @@ with st.sidebar:
         options=["none", "groq", "gemini", "anthropic"],
         index=1,
         format_func=lambda b: {
-            "none": "None (retrieval only)",
-            "groq": "Groq (free, global)",
-            "gemini": "Gemini (free, region-limited)",
+            "none": "None",
+            "groq": "Groq ",
+            "gemini": "Gemini ",
             "anthropic": "Anthropic Claude",
         }[b],
     )

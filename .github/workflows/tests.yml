@@ -24,9 +24,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      # Tests run with fakes — they don't need torch/FAISS/BEIR. Pipeline.py
-      # uses TYPE_CHECKING-guarded imports so the heavy deps stay out of the
-      # import graph at test time.
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
