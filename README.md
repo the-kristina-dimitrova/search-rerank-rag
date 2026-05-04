@@ -42,30 +42,13 @@ BM25 jumps directly to my own ML theory lecture notes, which contain the formal 
 
 Dense retrieval over SciFact initially promotes an off‑topic biomedical article about **vascular calcification (VC)**, because “VC” appears frequently and is strongly associated with that abbreviation in the corpus. The cross‑encoder reranker corrects this partially by surfacing my lecture notes, but noise from the biomedical sense of “VC” makes the top of the ranking less clean than BM25 over the unified corpus.
 
+#### Why BM25 is better here
 In this case, a sparse lexical index that includes my own notes (BM25) is strictly better: it treats “VC dimension” as a rare, highly discriminative phrase and jumps straight to the correct mathematical definition, while dense retrieval struggles with an overloaded acronym in the SciFact abstracts.
 
 ### Example 2 — dense + reranker wins on a high-level biomedical question
 
 **Query**  
 > Is there a link between gut microbiome and obesity?
-
-#### dense + cross-encoder
-
-**Generated answer (Groq)**  
-> Yes, there is a link between the gut microbiome and obesity. According to [P1], gut bacteria-derived lipopolysaccharide (LPS) can initiate obesity and insulin resistance in mice. Additionally, [P2] states that the presence of gut microbiota can induce insulin resistance and obesity in TLR2-deficient mice, characterized by changes in the gut microbiota and increased LPS absorption. [P3] also suggests that the intestinal immune system and gut microbiota play a role in metabolic disease, including obesity and insulin resistance. Furthermore, [P5] found that intestinal methane production, which is associated with the gut microbiome, is correlated with a higher body mass index (BMI) in obese individuals. Overall, these passages support the idea that the gut microbiome is linked to obesity, although the exact mechanisms and relationships are complex and multifaceted [P1, P2, P3, P5].
-
-Citation markers [P1], [P2]… refer to the passages below.
-
-**Top 5 passages — dense + CE**
-
-[P1] *Regulation of Serum Amyloid A3 (SAA3) in Mouse Colonic Epithelium and Adipose Tissue by the Intestinal Microbiota*  
-> The gut microbiota has been proposed as an environmental factor that affects the development of metabolic and inflammatory diseases in mammals. Recent reports indicate that gut bacteria-derived lipopolysaccharide (LPS) can initiate obesity and insulin resistance in mice; however, the molecular interactions responsible for microbial regulation of host metabolism and mediators of inflammation have not been studied in detail. [...]
-
-[P2] …  
-[P3] …  
-[P5] … (intestinal methane production correlated with BMI in obese individuals)
-
-*(Passages truncated for brevity.)*
 
 #### BM25 (for comparison)
 
@@ -78,6 +61,20 @@ Citation markers [P1], [P2]… refer to the passages below.
 > [...] Our aim was to examine whether gut microbial composition is associated with arterial stiffness. [...] Gut microbiome diversity is inversely associated with arterial stiffness in women. The effect of gut microbiome composition on PWV is only minimally mediated by MetS. [...]
 
 [P5] … (TLR2-deficient mice, microbiota transplantation, obesity)
+
+#### dense + cross-encoder
+
+**Generated answer (Groq)**  
+> Yes, there is a link between the gut microbiome and obesity. According to [P1], gut bacteria-derived lipopolysaccharide (LPS) can initiate obesity and insulin resistance in mice. Additionally, [P2] states that the presence of gut microbiota can induce insulin resistance and obesity in TLR2-deficient mice, characterized by changes in the gut microbiota and increased LPS absorption. [P3] also suggests that the intestinal immune system and gut microbiota play a role in metabolic disease, including obesity and insulin resistance. Furthermore, [P5] found that intestinal methane production, which is associated with the gut microbiome, is correlated with a higher body mass index (BMI) in obese individuals. Overall, these passages support the idea that the gut microbiome is linked to obesity, although the exact mechanisms and relationships are complex and multifaceted [P1, P2, P3, P5].
+
+**Top 5 passages — dense + CE**
+
+[P1] *Regulation of Serum Amyloid A3 (SAA3) in Mouse Colonic Epithelium and Adipose Tissue by the Intestinal Microbiota*  
+> The gut microbiota has been proposed as an environmental factor that affects the development of metabolic and inflammatory diseases in mammals. Recent reports indicate that gut bacteria-derived lipopolysaccharide (LPS) can initiate obesity and insulin resistance in mice; however, the molecular interactions responsible for microbial regulation of host metabolism and mediators of inflammation have not been studied in detail. [...]
+
+[P2] …  
+[P3] …  
+[P5] … (intestinal methane production correlated with BMI in obese individuals)
 
 #### Why dense + reranker is better here
 
